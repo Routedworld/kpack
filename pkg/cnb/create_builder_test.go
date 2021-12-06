@@ -129,7 +129,7 @@ func testCreateBuilderOs(os string, t *testing.T, when spec.G, it spec.S) {
 						LatestImage: runImage,
 						Image:       runImageTag,
 					},
-					Mixins:  []string{"some-unused-mixin", mixin},
+					Mixins:  []string{"some-unused-mixin", mixin, "common-mixin", "build:another-common-mixin", "run:another-common-mixin"},
 					UserID:  cnbUserId,
 					GroupID: cnbGroupId,
 				},
@@ -665,6 +665,112 @@ func testCreateBuilderOs(os string, t *testing.T, when spec.G, it spec.S) {
 				require.EqualError(t, err, "validating buildpack io.buildpack.unsupported.mixin@v4: stack missing mixin(s): something-missing-mixin, something-missing-mixin2")
 			})
 
+			it("works with relaxed mixin contract", func() {
+				lifecycleImg, err := imagehelpers.SetLabels(lifecycleImg, map[string]interface{}{
+					lifecycleMetadataLabel: LifecycleMetadata{
+						LifecycleInfo: LifecycleInfo{
+							Version: "0.5.0",
+						},
+						API: LifecycleAPI{
+							BuildpackVersion: "0.2",
+							PlatformVersion:  "0.7",
+						},
+						APIs: LifecycleAPIs{
+							Buildpack: APIVersions{
+								Deprecated: []string{"0.2"},
+								Supported:  []string{"0.3"},
+							},
+							Platform: APIVersions{
+								Deprecated: []string{},
+								Supported:  []string{relaxedMixinMinPlatformAPI},
+							},
+						},
+					},
+				})
+				require.NoError(t, err)
+
+				lifecycleProvider.image = lifecycleImg
+				buildpackRepository.AddBP("io.buildpack.relaxed.mixin", "v4", []buildpackLayer{
+					{
+						v1Layer: buildpack1Layer,
+						BuildpackInfo: DescriptiveBuildpackInfo{
+							BuildpackInfo: corev1alpha1.BuildpackInfo{
+								Id:      "io.buildpack.relaxed.mixin",
+								Version: "v4",
+							},
+							Homepage: "buildpack.1.com",
+						},
+						BuildpackLayerInfo: BuildpackLayerInfo{
+							API:         "0.2",
+							LayerDiffID: buildpack1Layer.diffID,
+							Stacks: []corev1alpha1.BuildpackStack{
+								{
+									ID:     stackID,
+									Mixins: []string{mixin, "build:common-mixin", "run:common-mixin", "another-common-mixin"},
+								},
+							},
+						},
+					},
+				})
+
+				clusterBuilderSpec.Order = []corev1alpha1.OrderEntry{
+					{
+						Group: []corev1alpha1.BuildpackRef{
+							{
+								BuildpackInfo: corev1alpha1.BuildpackInfo{
+									Id:      "io.buildpack.relaxed.mixin",
+									Version: "v4",
+								},
+							},
+						},
+					},
+				}
+
+				_, err = subject.CreateBuilder(keychain, store, stack, clusterBuilderSpec)
+				require.Nil(t, err)
+			})
+
+			it("ignores relaxed mixin contract with an older platform api", func() {
+				buildpackRepository.AddBP("io.buildpack.relaxed.old.mixin", "v4", []buildpackLayer{
+					{
+						v1Layer: buildpack1Layer,
+						BuildpackInfo: DescriptiveBuildpackInfo{
+							BuildpackInfo: corev1alpha1.BuildpackInfo{
+								Id:      "io.buildpack.relaxed.old.mixin",
+								Version: "v4",
+							},
+							Homepage: "buildpack.1.com",
+						},
+						BuildpackLayerInfo: BuildpackLayerInfo{
+							API:         "0.3",
+							LayerDiffID: buildpack1Layer.diffID,
+							Stacks: []corev1alpha1.BuildpackStack{
+								{
+									ID:     stackID,
+									Mixins: []string{mixin, "build:common-mixin", "run:common-mixin", "another-common-mixin"},
+								},
+							},
+						},
+					},
+				})
+
+				clusterBuilderSpec.Order = []corev1alpha1.OrderEntry{
+					{
+						Group: []corev1alpha1.BuildpackRef{
+							{
+								BuildpackInfo: corev1alpha1.BuildpackInfo{
+									Id:      "io.buildpack.relaxed.old.mixin",
+									Version: "v4",
+								},
+							},
+						},
+					},
+				}
+
+				_, err := subject.CreateBuilder(keychain, store, stack, clusterBuilderSpec)
+				require.Error(t, err, "validating buildpack io.buildpack.relaxed.old.mixin@v4: stack missing mixin(s): build:common-mixin, run:common-mixin, another-common-mixin")
+			})
+
 			it("errors with unsupported buildpack version", func() {
 				buildpackRepository.AddBP("io.buildpack.unsupported.buildpack.api", "v4", []buildpackLayer{
 					{
@@ -788,7 +894,7 @@ func testCreateBuilderOs(os string, t *testing.T, when spec.G, it spec.S) {
 							},
 							Platform: APIVersions{
 								Deprecated: []string{"0.1"},
-								Supported:  []string{"0.2", "0.7"},
+								Supported:  []string{"0.2", "0.999"},
 							},
 						},
 					},
@@ -798,7 +904,7 @@ func testCreateBuilderOs(os string, t *testing.T, when spec.G, it spec.S) {
 				lifecycleProvider.image = lifecycleImg
 
 				_, err = subject.CreateBuilder(keychain, store, stack, clusterBuilderSpec)
-				require.EqualError(t, err, "unsupported platform apis in kpack lifecycle: 0.1, 0.2, 0.7, expecting one of: 0.3, 0.4, 0.5, 0.6")
+				require.EqualError(t, err, "unsupported platform apis in kpack lifecycle: 0.1, 0.2, 0.999, expecting one of: 0.3, 0.4, 0.5, 0.6, 0.7, 0.8")
 			})
 		})
 	})
